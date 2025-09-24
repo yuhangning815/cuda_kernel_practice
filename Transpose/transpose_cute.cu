@@ -21,7 +21,7 @@ using namespace cute;
 
 
 
-
+// Regular -- no shared memory or swizzling 
 template <typename T, int BLK_M, int BLK_N, typename ThreadLayoutA,
           typename ThreadLayoutB>
 __global__ void mat_transpose_cute_reg_kernel(const T *pA, T *pB, int M, int N,
@@ -97,6 +97,13 @@ void mat_transpose_cute_col2row_reg(torch::Tensor x, torch::Tensor y) {
   CUDA_CHECK(cudaGetLastError());
 }
 
+
+
+
+
+// ---------------------- SHMEM usage -----------------------------
+
+
 template <typename T, int BLK_M, int BLK_N, typename ThreadLayoutA,
           typename ThreadLayoutB, typename SmemLayoutA, typename SmemLayoutB>
 __global__ void
@@ -155,6 +162,9 @@ mat_transpose_cute_smem_kernel(const T *pA, T *pB, int M, int N,
   __syncthreads();
   copy_if(tBpB, tBsB, tBgB);
 }
+
+
+
 
 constexpr int log2(int x) {
   assert(x > 0);
@@ -282,7 +292,7 @@ __global__ void mat_transpose_cute_smem_vectorized_kernel(
   Tensor tAgA = thr_copy_a.partition_S(gA);
   Tensor tAsA = thr_copy_a.partition_D(sA);
 
-  auto thr_copy_b = copy_b.get_slice(tx);
+  auto thr_copy_b = copy_b.get_slice(tx);copy_a
   Tensor tBsB = thr_copy_b.partition_S(sB);
   Tensor tBgB = thr_copy_b.partition_D(gB);
 
