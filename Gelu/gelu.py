@@ -2,15 +2,16 @@ import time
 from functools import partial
 from typing import Optional
 
-import torch
+import torch.nn
+import torch.utils
 from torch.utils.cpp_extension import load
 
 torch.set_grad_enabled(False)
 
 # Load the CUDA kernel as a python module
 lib = load(
-    name="sigmoid_lib",
-    sources=["sigmoid.cu"],
+    name="gelu_lib",
+    sources=["gelu.cu"],
     extra_cuda_cflags=[
         "-O3",
         "-U__CUDA_NO_HALF_OPERATORS__",
@@ -66,22 +67,15 @@ def run_benchmark(
     return out, mean_time
 
 
-Ss = [1024, 4096]
-Ks = [1024, 4096]
+Ss = [1024, 2048, 4096]
+Ks = [1024, 2048, 4096]
 SKs = [(S, K) for S in Ss for K in Ks]
-
+torch.gelu = torch.nn.GELU("tanh")
 for S, K in SKs:
     print("-" * 85)
     print(" " * 40 + f"S={S}, K={K}")
     x = torch.randn((S, K)).cuda().float().contiguous()
     y = torch.zeros_like(x).cuda().float().contiguous()
-    run_benchmark(lib.sigmoid_f32, x, "f32", y)
-    run_benchmark(lib.sigmoid_f32x4, x, "f32x4", y)
-    run_benchmark(partial(torch.sigmoid, out=y), x, "f32_th")
-
-    print("-" * 85)
-    x_f16 = x.half().contiguous()
-    y_f16 = y.half().contiguous()
-    run_benchmark(lib.sigmoid_f16, x_f16, "f16", y_f16)
-    run_benchmark(partial(torch.sigmoid, out=y_f16), x_f16, "f16_th")
-    print("-" * 85)
+    run_benchmark(lib.gelu_f32, x, "f32", y)
+    run_benchmark(lib.gelu_f32x4, x, "f32x4", y)
+    run_benchmark(partial(torch.gelu), x, "f32_th")

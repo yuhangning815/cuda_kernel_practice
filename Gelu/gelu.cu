@@ -18,20 +18,10 @@
 #define LDST128BITS(value) (reinterpret_cast<float4 *>(&(value))[0])
 #define MAX_EXP_F32 88.3762626647949f
 #define MIN_EXP_F32 -88.3762626647949f
-#define MAX_EXP_F16 __float2half(11.089866488461016f)
-#define MIN_EXP_F16 __float2half(-9.704060527839234f)
 #define SQRT_2_PI M_SQRT2 *M_2_SQRTPI * 0.5f
-#define HALF_1 __float2half(1.0f)
-#define HALF_2 __float2half(2.0f)
-#define HALF_DIV2 __float2half(0.5f)
 // to clear the error among self defined gelu and pytorch gelu. Calculate
 // $\sqrt{\frac{\pi}{2}}$ by $\sqrt{2 * \pi} / 2$
 
-#define HALF_SQRT_2_PI                                                         \
-  __float2half(M_SQRT2) * __float2half(M_2_SQRTPI) * HALF_DIV2
-#define HALF_V_APP __float2half(0.044715f)
-
-#define HALF_GELU_OPS gelu_tanh_approximate
 #define GELU_OPS gelu_tanh_approximate
 
 // There is no half presicion operation like sinh, cosh, tanh. [Half Math
@@ -49,16 +39,6 @@
 
 // __inline__ -> compiler直接把他放到call的地方，而没有真正的call function。
 // 1. 减少call 的overhead 2.更多的compiler optimization （CSE，constant folding) 3. 更多的register pressure和code size
-
-__inline__ __device__ half gelu_tanh_approximate(half x) {
-  half x_cube = x * x * x;
-  // compute mid value : inner = 0.7978845608 * (x + 0.044715 * x * x * x)
-  half inner = HALF_SQRT_2_PI * (x + HALF_V_APP * x_cube);
-  // compute tanh
-  return HALF_DIV2 * x *
-         (HALF_1 +
-          ((hexp(inner * HALF_2) - HALF_1) / (hexp(inner * HALF_2) + HALF_1)));
-}
 
 __inline__ __device__ float gelu_tanh_approximate(float x) {
   return 0.5f * x * (1.0f + tanhf(SQRT_2_PI * (x + 0.044715f * x * x * x)));
@@ -99,97 +79,6 @@ __global__ void gelu_f32x4_kernel(float *x, float *y, int N) {
 
   if ((idx + 0) < N) {
     FLOAT4(y[idx]) = reg_y;
-  }
-}
-
-// FP16
-// GELU approximate: x, y:x 0.5 * x *
-// (1.0 + tanh(0.7978845608 (x + 0.044715 * x * x * x))) Vec4
-__global__ void gelu_f16_kernel(half *x, half *y, int N) {
-  int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx < N) {
-    half v = x[idx];
-    v = __hmin(__hmax(v, MIN_EXP_F16), MAX_EXP_F16);
-
-    y[idx] = HALF_GELU_OPS(v);
-  }
-}
-
-__global__ void gelu_f16x2_kernel(half *x, half *y, int N) {
-  int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 2;
-
-  half2 reg_x = HALF2(x[idx]);
-  half2 reg_y;
-  reg_x.x = __hmin(__hmax(reg_x.x, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x.y = __hmin(__hmax(reg_x.y, MIN_EXP_F16), MAX_EXP_F16);
-
-  reg_y.x = HALF_GELU_OPS(reg_x.x);
-  reg_y.y = HALF_GELU_OPS(reg_x.y);
-  if ((idx + 0) < N) {
-    HALF2(y[idx]) = reg_y;
-  }
-}
-
-// unpack f16x8
-__global__ void gelu_f16x8_kernel(half *x, half *y, int N) {
-  int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 8;
-
-  half2 reg_x_0 = HALF2(x[idx + 0]);
-  half2 reg_x_1 = HALF2(x[idx + 2]);
-  half2 reg_x_2 = HALF2(x[idx + 4]);
-  half2 reg_x_3 = HALF2(x[idx + 6]);
-
-  reg_x_0.x = __hmin(__hmax(reg_x_0.x, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x_0.y = __hmin(__hmax(reg_x_0.y, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x_1.x = __hmin(__hmax(reg_x_1.x, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x_1.y = __hmin(__hmax(reg_x_1.y, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x_2.x = __hmin(__hmax(reg_x_2.x, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x_2.y = __hmin(__hmax(reg_x_2.y, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x_3.x = __hmin(__hmax(reg_x_3.x, MIN_EXP_F16), MAX_EXP_F16);
-  reg_x_3.y = __hmin(__hmax(reg_x_3.y, MIN_EXP_F16), MAX_EXP_F16);
-
-  half2 reg_y_0, reg_y_1, reg_y_2, reg_y_3;
-
-  reg_x_0.x = HALF_GELU_OPS(reg_x_0.x);
-  reg_x_0.y = HALF_GELU_OPS(reg_x_0.y);
-  reg_x_1.x = HALF_GELU_OPS(reg_x_1.x);
-  reg_x_1.y = HALF_GELU_OPS(reg_x_1.y);
-  reg_x_2.x = HALF_GELU_OPS(reg_x_2.x);
-  reg_x_2.y = HALF_GELU_OPS(reg_x_2.y);
-  reg_x_3.x = HALF_GELU_OPS(reg_x_3.x);
-  reg_x_3.y = HALF_GELU_OPS(reg_x_3.y);
-
-  if ((idx + 0) < N) {
-    HALF2(y[idx + 0]) = reg_x_0;
-  }
-  if ((idx + 2) < N) {
-    HALF2(y[idx + 2]) = reg_x_1;
-  }
-  if ((idx + 4) < N) {
-    HALF2(y[idx + 4]) = reg_x_2;
-  }
-  if ((idx + 6) < N) {
-    HALF2(y[idx + 6]) = reg_x_3;
-  }
-}
-
-// pack f16x8
-__global__ void gelu_f16x8_pack_kernel(half *x, half *y, int N) {
-  int idx = (blockIdx.x * blockDim.x + threadIdx.x) * 8;
-
-  // temporary register(memory), .local space in ptx, addressable
-  half pack_x[8], pack_y[8]; // 8x16 bits=128 bits.
-  // reinterpret as float4 and load 128 bits in 1 memory issue.
-  LDST128BITS(pack_x[0]) = LDST128BITS(x[idx]); // load 128 bits
-
-#pragma unroll
-  for (int i = 0; i < 8; ++i) {
-    half v = __hmin(__hmax(pack_x[i], MIN_EXP_F16), MAX_EXP_F16);
-    pack_y[i] = HALF_GELU_OPS(v);
-  }
-  // reinterpret as float4 and store 128 bits in 1 memory issue.
-  if ((idx + 7) < N) {
-    LDST128BITS(y[idx]) = LDST128BITS(pack_y[0]);
   }
 }
 
@@ -244,16 +133,8 @@ __global__ void gelu_f16x8_pack_kernel(half *x, half *y, int N) {
 
 TORCH_BINDING_GELU(f32, torch::kFloat32, float, 1)
 TORCH_BINDING_GELU(f32x4, torch::kFloat32, float, 4)
-TORCH_BINDING_GELU(f16, torch::kHalf, half, 1)
-TORCH_BINDING_GELU(f16x2, torch::kHalf, half, 2)
-TORCH_BINDING_GELU(f16x8, torch::kHalf, half, 8)
-TORCH_BINDING_GELU(f16x8_pack, torch::kHalf, half, 8)
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   TORCH_BINDING_COMMON_EXTENSION(gelu_f32)
   TORCH_BINDING_COMMON_EXTENSION(gelu_f32x4)
-  TORCH_BINDING_COMMON_EXTENSION(gelu_f16)
-  TORCH_BINDING_COMMON_EXTENSION(gelu_f16x2)
-  TORCH_BINDING_COMMON_EXTENSION(gelu_f16x8)
-  TORCH_BINDING_COMMON_EXTENSION(gelu_f16x8_pack)
 }
