@@ -13,9 +13,6 @@
 #define WARP_SIZE 32
 #define INT4(value) (reinterpret_cast<int4 *>(&(value))[0])
 #define FLOAT4(value) (reinterpret_cast<float4 *>(&(value))[0])
-#define HALF2(value) (reinterpret_cast<half2 *>(&(value))[0])
-#define BFLOAT2(value) (reinterpret_cast<__nv_bfloat162 *>(&(value))[0])
-#define LDST128BITS(value) (reinterpret_cast<float4 *>(&(value))[0])
 #define MAX_EXP_F32 88.3762626647949f
 #define MIN_EXP_F32 -88.3762626647949f
 #define SQRT_2_PI M_SQRT2 *M_2_SQRTPI * 0.5f
@@ -30,7 +27,6 @@
 // But ops above will introduce error.
 // pytorch transform type while do tanh operator which include in the
 // [pytorch/c10/util/BFloat16-math.h](https://github.com/pytorch/pytorch/blob/main/c10/util/BFloat16-math.h)
-
 
 
 
@@ -138,3 +134,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   TORCH_BINDING_COMMON_EXTENSION(gelu_f32)
   TORCH_BINDING_COMMON_EXTENSION(gelu_f32x4)
 }
+
+
+

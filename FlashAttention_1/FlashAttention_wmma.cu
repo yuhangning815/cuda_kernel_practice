@@ -1,23 +1,26 @@
+// Tensor Core implementation - WMMA
+
+
 
 // 对 d 也进行了切片
-struct __align__(8) MD_F
+struct __align__(8) MD_Struct
 {
     float m; // max val
     float d; // exp sum
 };
 
-struct MDFOp
+struct MDStructOp
 {
-    __device__ __forceinline__ MD_F operator()(MD_F &a, MD_F &b)
+    __device__ __forceinline__ MD_Struct operator()(MD_Struct &a, MD_Struct &b)
     {
-        MD_F ret;
+        MD_Struct ret;
         ret.m = max(a.m, b.m);
         ret.d = a.d * __expf(a.m - ret.m) + b.d * __expf(b.m - ret.m);
         return ret;
     }
 };
 
-__device__ __inline__ MD_F warpAllReduce(MD_F val)
+__device__ __inline__ MD_Struct warpAllReduce(MD_Struct val)
 {
     float tmp_m;
 #pragma unroll
@@ -33,11 +36,11 @@ __device__ __inline__ MD_F warpAllReduce(MD_F val)
 
 
 
-void launchFlashAttentionKernel_v3(const float *__restrict__ Q, const float *__restrict__ K, const float *__restrict__ V,
+void launchFlashAttentionKernel_wmma(const float *__restrict__ Q, const float *__restrict__ K, const float *__restrict__ V,
                                     float *__restrict__ O, float *__restrict__ l, float *__restrict__ m,
                                     const int batch_size, const int num_head, const int N, const int M, const int d, cudaStream_t stream)
 {
-    printf("in fa v3 launchFlashAttentionKernel_v3\n");
+    printf("in fa v3 launchFlashAttentionKernel_wmma\n");
     constexpr int Bc = 32;
     constexpr int Br = 64;
     constexpr int Wr = 32;
@@ -56,9 +59,9 @@ void launchFlashAttentionKernel_v3(const float *__restrict__ Q, const float *__r
         __shared__ float s_O[Br * Bd];
 
         // 前一个 Bc 组的 l 和 m
-        __shared__ MD_F row_ml_prev[Br];
-        __shared__ MD_F row_ml[Br];
-        __shared__ MD_F row_ml_new[Br];
+        __shared__ MD_Struct row_ml_prev[Br];
+        __shared__ MD_Struct row_ml[Br];
+        __shared__ MD_Struct row_ml_new[Br];
         */
 
     const int sram_size = (Br * Bc + Br * Bd) * sizeof(float) + (Br * Bd + 2 * Bc * Bd + Br * Bc) * sizeof(half) + 8 * 3 * Br;

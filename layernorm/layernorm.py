@@ -85,30 +85,6 @@ run_benchmark(lib.layer_norm_f32x4, x, "f32x4", out)
 run_benchmark(naive_layer_norm, x, "f32_th")
 
 print("-" * 85)
-x_f16 = x.half()
-out_f16 = out.half()
-run_benchmark(lib.layer_norm_f16_f16, x_f16, "f16f16", out_f16)
-run_benchmark(naive_layer_norm, x_f16, "f16_th")
-print("-" * 85)
-
-print("-" * 85)
-N, K = 4096, 1024
-print(" " * 40 + f"N={N}, K={K}")
-print("-" * 85)
-x = torch.randn((N, K)).cuda().float().contiguous()
-out = torch.zeros_like(x).cuda().float().contiguous()
-run_benchmark(lib.layer_norm_f32, x, "f32", out)
-run_benchmark(lib.layer_norm_f32x4, x, "f32x4", out)
-run_benchmark(naive_layer_norm, x, "f32_th")
-
-print("-" * 85)
-x_f16 = x.half()
-out_f16 = out.half()
-run_benchmark(lib.layer_norm_f16_f16, x_f16, "f16f16", out_f16)
-run_benchmark(naive_layer_norm, x_f16, "f16_th")
-print("-" * 85)
-
-print("-" * 85)
 N, K = 4096, 2048
 print(" " * 40 + f"N={N}, K={K}")
 print("-" * 85)
@@ -117,12 +93,6 @@ out = torch.zeros_like(x).cuda().float().contiguous()
 run_benchmark(lib.layer_norm_f32x4, x, "f32x4", out)
 run_benchmark(naive_layer_norm, x, "f32_th")
 
-print("-" * 85)
-x_f16 = x.half()
-out_f16 = out.half()
-run_benchmark(lib.layer_norm_f16_f16, x_f16, "f16f16", out_f16)
-run_benchmark(naive_layer_norm, x_f16, "f16_th")
-print("-" * 85)
 
 print("-" * 85)
 N, K = 4096, 4096
@@ -132,23 +102,6 @@ x = torch.randn((N, K)).cuda().float().contiguous()
 out = torch.zeros_like(x).cuda().float().contiguous()
 run_benchmark(lib.layer_norm_f32x4, x, "f32x4", out)
 run_benchmark(naive_layer_norm, x, "f32_th")
-
-print("-" * 85)
-x_f16 = x.half()
-out_f16 = out.half()
-run_benchmark(lib.layer_norm_f16_f16, x_f16, "f16f16", out_f16)
-run_benchmark(naive_layer_norm, x_f16, "f16_th")
-print("-" * 85)
-
-print("-" * 85)
-N, K = 4096, 8192
-print(" " * 40 + f"N={N}, K={K}")
-print("-" * 85)
-x_f16 = torch.randn((N, K)).cuda().half().contiguous()
-out_f16 = torch.zeros_like(x_f16).cuda().half().contiguous()
-run_benchmark(lib.layer_norm_f16_f16, x_f16, "f16f16", out_f16)
-run_benchmark(naive_layer_norm, x_f16, "f16_th")
-print("-" * 85)
 
 print("-" * 85)
 N, K = 8192, 8192

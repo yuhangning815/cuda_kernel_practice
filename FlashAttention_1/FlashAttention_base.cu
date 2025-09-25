@@ -10,7 +10,7 @@
 
 
 __global__
-void forward_kernel(const float* Q, const float* K, const float* V, const int N, const int d,
+void FlashAttention_base_kernel(const float* Q, const float* K, const float* V, const int N, const int d,
                     const int Tc, const int Tr, const int Bc, const int Br, const float softmax_scale,
                     float* l, float *m, float* O) {
 
@@ -107,7 +107,7 @@ void forward_kernel(const float* Q, const float* K, const float* V, const int N,
 
 
 
-torch::Tensor forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+torch::Tensor FlashAttention_base_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
     // Q,K,V: [batch_size, num_head, N, d]
 
     // TODO: determine Bc, Br dynamically
@@ -135,9 +135,9 @@ torch::Tensor forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
     printf("Max shared memory: %d, requested shared memory: %d \\n", max_sram_size, sram_size);
 
     dim3 grid_dim(B, nh);  // batch_size x num_heads       -> 一个block处理一个batch的一个head
-    dim3 block_dim(Bc);  // Bc threads per block
+    dim3 block_dim(Bc);  // Bc threads per block            -> 1D block ！！！
 
-    forward_kernel<<<grid_dim, block_dim, sram_size>>>(
+    FlashAttention_base_kernel<<<grid_dim, block_dim, sram_size>>>(
         Q.data_ptr<float>(), K.data_ptr<float>(), V.data_ptr<float>(),
         N, d, Tc, Tr, Bc, Br, softmax_scale,
         l.data_ptr<float>(), m.data_ptr<float>(), O.data_ptr<float>()
