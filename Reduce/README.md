@@ -44,7 +44,7 @@ Block Structure: 256 threads = 8 warps × 32 threads
   - Atomic addition for final result
 - **Grid/Block Configuration**: `grid(N/256), block(256)`
 - **Memory Pattern**: Coalesced access, 1 element per thread
-- **Performance**: _______ ms (to be filled)
+- **Performance of S=4096 and K=4096**: 0.469 ms 
 
 ### 2. Vectorized FP32x4 Kernel (`block_all_reduce_sum_f32x4_f32_kernel`)
 - **Description**: Vectorized kernel processing 4 elements per thread
@@ -55,7 +55,7 @@ Block Structure: 256 threads = 8 warps × 32 threads
   - Same warp/block reduction pattern as standard kernel
 - **Grid/Block Configuration**: `grid(N/256), block(64)` (256/4 threads)
 - **Memory Pattern**: 128-bit coalesced loads, 4 elements per thread
-- **Performance**: _______ ms (to be filled)
+- **Performance of S=4096 and K=4096 **: 0.273 ms 
 
 ## Warp-Level Primitives
 
@@ -84,22 +84,6 @@ __device__ __forceinline__ float warp_reduce_sum_f32(float val) {
 The `block_reduce.py` script provides performance comparison between:
 - Custom CUDA kernels (`block_all_reduce_sum_f32_f32`, `block_all_reduce_sum_f32x4_f32`)
 - PyTorch native implementation (`torch.sum`)
-
-### Test Configuration
-- **Tensor Sizes**: [2048, 4096] × [2048, 4096] 
-- **Data Type**: FP32 (Float32)
-- **Iterations**: 1000 (with 10 warmup runs)
-- **Precision**: Single precision floating-point
-
-### Sample Results Template
-```
---------------------------------------------------------------------------------
-                                        S=2048, K=2048
-                  out_f32f32: _______________, time:_______ms
-                out_f32x4f32: _______________, time:_______ms
-               out_f32f32_th: _______________, time:_______ms
---------------------------------------------------------------------------------
-```
 
 ## Key Optimizations
 

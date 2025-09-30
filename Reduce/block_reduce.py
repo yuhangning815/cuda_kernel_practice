@@ -58,4 +58,6 @@ for S, K in SKs:
     values = torch.randn((S, K)).cuda().float()
     run_benchmark(lib.block_all_reduce_sum_f32_f32, values, "f32f32")
     run_benchmark(lib.block_all_reduce_sum_f32x4_f32, values, "f32x4f32")
-    run_benchmark(torch.sum, values, "f32f32_th")
+    run_benchmark(torch.sum, values, "f32f32_pytorch")
+
+    
