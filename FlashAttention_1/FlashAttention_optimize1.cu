@@ -6,12 +6,23 @@
     * l: [batch_size, num_head, N, 1]
     * m: [batch_size, num_head, N, 1]
     */
+#include <assert.h>
+#include <cfloat>
+#include <cublas_v2.h>
+#include <mma.h>
+#include <stdio.h>
+#include <torch/types.h>
+#include <cuda.h>
+#include <cuda_runtime.h>
+#include <ATen/cuda/CUDAContext.h>
+#include "utils.cuh"
 
 
 
-    
+
+
 template <int Bc>
-__global__ void flashAttentionKernel_v1(const float *__restrict__ Q, const float *__restrict__ K, const float *__restrict__ V,
+__global__ void flashAttentionKernel_optimize1(const float *__restrict__ Q, const float *__restrict__ K, const float *__restrict__ V,
                                         float *__restrict__ O, float *__restrict__ l, float *__restrict__ m,
                                         const int N, const int M, const int d, const float softmax_scale)
 {
@@ -25,7 +36,7 @@ __global__ void flashAttentionKernel_v1(const float *__restrict__ Q, const float
     float *s_V = s_K + Bc * d; // [Bc, d]
     float *s_S = s_V + Bc * d; // [1, Bc]
 
-    __shared__ MD_F row_ml_prev;
+    __shared__ MD_Struct row_ml_prev;
 
     // 对 K|V 在 M 维度分组，每组长度为 Bc，共分为 Tc 组. 一个thread负责一行
     for (int i = 0; i < M; i += Bc)
@@ -55,11 +66,11 @@ __global__ void flashAttentionKernel_v1(const float *__restrict__ Q, const float
             __syncthreads();
 
             // 存储当前第 j 行的 l 和 m
-            MD_F row_ml = {-1e20f, 0.0f};
+            MD_Struct row_ml = {-1e20f, 0.0f};
             // 遍历 K^T 的 Bc 列
             for (int k = 0; k < Bc; ++k)
             {
-                MD_F tmp_ml = {0.0f, 1.0f};
+                MD_Struct tmp_ml = {0.0f, 1.0f};
                 // 计算 QK^T
                 for (int x = threadIdx.x; x < d; x += blockDim.x)
                 {
@@ -70,13 +81,13 @@ __global__ void flashAttentionKernel_v1(const float *__restrict__ Q, const float
 
                 // 存储第 j 行的 Q 向量与第 k 列的 s_K 向量的内积, QK^T 矩阵当前第 j 列的值
                 tmp_ml.m = blockAllReduceSum<float>(tmp_ml.m);
-                row_ml = MDFOp()(row_ml, tmp_ml);
+                row_ml = MDStructOp()(row_ml, tmp_ml);
                 if (threadIdx.x == 0) { s_S[k] = tmp_ml.m; }
                 __syncthreads();
             }
             __syncthreads();
 
-            MD_F row_ml_new = MDFOp()(row_ml_prev, row_ml);
+            MD_Struct row_ml_new = MDStructOp()(row_ml_prev, row_ml);
 
             // 遍历矩阵 O 的 d 维度，O = softmax(QK^T)V
             for (int k = threadIdx.x; k < d; k += blockDim.x)
@@ -102,11 +113,11 @@ __global__ void flashAttentionKernel_v1(const float *__restrict__ Q, const float
     }
 }
 
-void launchFlashAttentionKernel_v1(const float *__restrict__ Q, const float *__restrict__ K, const float *__restrict__ V,
+void launchFlashAttentionKernel_optimize1(const float *__restrict__ Q, const float *__restrict__ K, const float *__restrict__ V,
                                     float *__restrict__ O, float *__restrict__ l, float *__restrict__ m,
                                     const int batch_size, const int num_head, const int N, const int M, const int d, cudaStream_t stream)
 {
-    constexpr int Bc = 4;
+    constexpr int Bc = 8;
     assert(M % Bc == 0);
     const float softmax_scale = 1.0f / sqrtf((float)d);
 
@@ -118,5 +129,32 @@ void launchFlashAttentionKernel_v1(const float *__restrict__ Q, const float *__r
     constexpr int block_size = 128;
     dim3 grid_dim(num_head, batch_size);
     dim3 block_dim(block_size);
-    flashAttentionKernel_v1<Bc><<<grid_dim, block_dim, sram_size, stream>>>(Q, K, V, O, l, m, N, M, d, softmax_scale);
+    flashAttentionKernel_optimize1<Bc><<<grid_dim, block_dim, sram_size, stream>>>(Q, K, V, O, l, m, N, M, d, softmax_scale);
+} 
+
+// Torch forward wrapper for optimize1 implementation
+torch::Tensor FlashAttention_optimize1_forward(torch::Tensor Q, torch::Tensor K, torch::Tensor V) {
+    // Q, K, V: [batch_size, num_head, N, d] and [batch_size, num_head, M, d]
+    const int batch_size = Q.size(0);
+    const int num_head = Q.size(1);
+    const int N = Q.size(2);
+    const int d = Q.size(3);
+    const int M = K.size(2);
+
+    auto O = torch::zeros_like(Q);
+    auto l = torch::zeros({batch_size, num_head, N}, Q.options().dtype(torch::kFloat));
+    auto m = torch::full({batch_size, num_head, N}, -INFINITY, Q.options().dtype(torch::kFloat));
+
+    cudaStream_t stream = at::cuda::getCurrentCUDAStream();
+
+    launchFlashAttentionKernel_optimize1(
+        Q.data_ptr<float>(), K.data_ptr<float>(), V.data_ptr<float>(),
+        O.data_ptr<float>(), l.data_ptr<float>(), m.data_ptr<float>(),
+        batch_size, num_head, N, M, d, stream);
+
+    // Ensure kernel completion for correctness when returning tensor
+    // Not strictly necessary as PyTorch stream semantics handle this, but keep for safety in benchmarks
+    // cudaStreamSynchronize(stream);
+
+    return O;
 }

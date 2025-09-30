@@ -292,7 +292,7 @@ __global__ void mat_transpose_cute_smem_vectorized_kernel(
   Tensor tAgA = thr_copy_a.partition_S(gA);
   Tensor tAsA = thr_copy_a.partition_D(sA);
 
-  auto thr_copy_b = copy_b.get_slice(tx);copy_a
+  auto thr_copy_b = copy_b.get_slice(tx);
   Tensor tBsB = thr_copy_b.partition_S(sB);
   Tensor tBgB = thr_copy_b.partition_D(gB);
 

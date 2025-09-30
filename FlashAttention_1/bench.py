@@ -5,12 +5,12 @@ from torch.nn import functional as F
 from torch.utils.cpp_extension import load
 
 # Load the CUDA kernel as a python module
-minimal_attn = load(name='minimal_attn', sources=['main.cpp', 'FlashAttention_optimize1.cu'], extra_cuda_cflags=['-O2'])
+minimal_attn = load(name='minimal_attn', sources=['main.cpp', 'FlashAttention_base.cu', 'FlashAttention_optimize1.cu', 'FlashAttention_wmma.cu'], extra_cuda_cflags=['-O2'])
 
 # Use small model params, otherwise slower than manual attention. See caveats in README.
 batch_size = 24
 n_head = 12
-seq_len = 64
+seq_len = 1024
 head_embd = 128
 
 q = torch.randn(batch_size, n_head, seq_len, head_embd).cuda()
@@ -35,11 +35,36 @@ print(prof.key_averages().table(sort_by='cuda_time_total', row_limit=10))
 
 
 
-# 2. Minimal flash attention
+# 2. Flash attention base
+print('=== profiling flash attention base === ')
+
+with torch.autograd.profiler.profile(use_cuda=True) as prof:
+    base_result = minimal_attn.FlashAttention_base_forward(q, k, v)
+print(prof.key_averages().table(sort_by='cuda_time_total', row_limit=10))
+
+print('base attn values correctness check:', torch.allclose(base_result, manual_result, rtol=0, atol=1e-02))
+
+
+
+
+# 3. Flash attention optimize1
 print('=== profiling flash attention optimize1 === ')
 
 with torch.autograd.profiler.profile(use_cuda=True) as prof:
-    minimal_result = minimal_attn.FlashAttention_base_forward(q, k, v)
+    optimize1_result = minimal_attn.FlashAttention_optimize1_forward(q, k, v)
 print(prof.key_averages().table(sort_by='cuda_time_total', row_limit=10))
 
-print('attn values correctness check:', torch.allclose(minimal_result, manual_result, rtol=0, atol=1e-02))
+print('optimize1 attn values correctness check:', torch.allclose(optimize1_result, manual_result, rtol=0, atol=1e-02))
+
+
+
+# # 4. Flash attention WMMA
+# print('=== profiling flash attention WMMA === ')
+
+# with torch.autograd.profiler.profile(use_cuda=True) as prof:
+#     wmma_result = minimal_attn.FlashAttention_wmma_forward(q, k, v)
+# print(prof.key_averages().table(sort_by='cuda_time_total', row_limit=10))
+
+# print('wmma attn values correctness check:', torch.allclose(wmma_result, manual_result, rtol=0, atol=1e-02))
+
+

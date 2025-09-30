@@ -134,3 +134,8 @@ The script automatically compiles the CUDA kernels using PyTorch's JIT compilati
 - **Atomic Consistency**: Global atomic operations ensure race-condition-free final results
 - **Template Flexibility**: Kernels are templated for different block sizes and data types
 - **Memory Bandwidth**: Vectorized operations maximize memory subsystem utilization
+
+
+Command line:
+```bash
+TORCH_CUDA_ARCH_LIST="8.9+PTX" python block_reduce.py
