@@ -7,21 +7,135 @@ template <typename T>
 void gen_random_data(T *data, int n);
 
 // Native CUDA GEMM kernel (no CuTe)
+// template <typename T>
+// __global__ void gemm_native_cuda(T *C, const T *A, const T *B, int M, int N, int K) {
+//     int row = blockIdx.y * blockDim.y + threadIdx.y;
+//     int col = blockIdx.x * blockDim.x + threadIdx.x;
+    
+//     if (row < M && col < N) {
+//         T sum = T(0.0f);
+//         for (int k = 0; k < K; k++) {
+//             // A is M x K, B is N x K (so B^T is K x N)
+//             // C = A * B^T, so C[row][col] = sum(A[row][k] * B[col][k])
+//             sum += A[row * K + k] * B[col * K + k];
+//         }
+//         C[row * N + col] = sum;
+//     }
+// }
+
+
+
+#define BM 64
+#define BN 64
+#define BK 16
+#define TM 4
+#define TN 4
+#define NumBuffer 2
+
+#define OFFSET(row, col, ld) ((row) * (ld) + (col))
+
+
+// dim3 grid_native((n + BN - 1) / BN, (m + BM - 1) / BM);
+// dim3 block_native(BN / TN, BM / TM);
+// A is M x K in row major, B is N x K in row major 
+// Native CUDA GEMM kernel (no CuTe)
 template <typename T>
 __global__ void gemm_native_cuda(T *C, const T *A, const T *B, int M, int N, int K) {
-    int row = blockIdx.y * blockDim.y + threadIdx.y;
-    int col = blockIdx.x * blockDim.x + threadIdx.x;
-    
-    if (row < M && col < N) {
-        T sum = T(0.0f);
-        for (int k = 0; k < K; k++) {
-            // A is M x K, B is N x K (so B^T is K x N)
-            // C = A * B^T, so C[row][col] = sum(A[row][k] * B[col][k])
-            sum += A[row * K + k] * B[col * K + k];
-        }
-        C[row * N + col] = sum;
+
+  // 1. avoid bank conflicts
+  // 2. Double buffer
+
+  __shared__ T shmem_A[NumBuffer][BM][BK + 1];
+  __shared__ T shmem_B[NumBuffer][BN][BK + 1];
+
+
+  // each thread is also responsible for a block 
+  float t_c[TM][TN] = {0.0};
+
+  int gmem_start_m = blockIdx.y * BM;
+  int gmem_start_n = blockIdx.x * BN;
+
+
+  // k_idx = 0 - first load
+  int buffer_idx = 0;
+  for (int j = 0; j < BM * BK; j += blockDim.x * blockDim.y) {
+    int row = (j + threadIdx.y * blockDim.x + threadIdx.x) / BK;
+    int col = (j + threadIdx.y * blockDim.x + threadIdx.x) % BK;
+    shmem_A[buffer_idx][row][col] = A[OFFSET(gmem_start_m + row,col, K)];
+  }
+
+  for (int j = 0; j < BN * BK; j += blockDim.x * blockDim.y) {
+      int row = (j + threadIdx.y * blockDim.x + threadIdx.x) / BK;
+      int col = (j + threadIdx.y * blockDim.x + threadIdx.x) % BK;
+      shmem_B[buffer_idx][row][col] = B[OFFSET(gmem_start_n + row,col, K)];
+  }
+
+  // start from k_idx = 1
+  for (int k_idx = 1; k_idx < (K + BK - 1) / BK; k_idx ++) {
+    int gemm_start_k_next = k_idx * BK;
+
+    int buffer_idx_next = (buffer_idx + 1) % NumBuffer;
+    for (int j = 0; j < BM * BK; j += blockDim.x * blockDim.y) {
+        int row = (j + threadIdx.y * blockDim.x + threadIdx.x) / BK;
+        int col = (j + threadIdx.y * blockDim.x + threadIdx.x) % BK;
+        shmem_A[buffer_idx_next][row][col] = A[OFFSET(gmem_start_m + row, gemm_start_k_next + col, K)];
     }
+    
+    for (int j = 0; j < BN * BK; j += blockDim.x * blockDim.y) {
+        int row = (j + threadIdx.y * blockDim.x + threadIdx.x) / BK;
+        int col = (j + threadIdx.y * blockDim.x + threadIdx.x) % BK;
+        shmem_B[buffer_idx_next][row][col] = B[OFFSET(gmem_start_n + row, gemm_start_k_next + col, K)];
+    }
+
+    // [128, 8] x [128, 8] = [128, 128]
+    // each thread traverses the K dimension to compute!
+    #pragma unroll
+    for (int k = 0; k < BK; k++ ){
+      #pragma unroll
+      for (int i = 0; i < TM; i++ ){
+        #pragma unroll
+        for (int j = 0; j < TN; j++ ){
+            int output_row = threadIdx.y * TM + i;
+            int output_col = threadIdx.x * TN + j;
+            t_c[i][j] += shmem_A[buffer_idx][output_row][k] * shmem_B[buffer_idx][output_col][k];
+        }
+      }
+    }
+    buffer_idx = buffer_idx_next;
+    __syncthreads();
+  } // for k_idx
+
+  // last compute
+  #pragma unroll
+  for (int k = 0; k < BK; k++ ){
+    #pragma unroll
+    for (int i = 0; i < TM; i++ ){
+      #pragma unroll
+      for (int j = 0; j < TN; j++ ){
+          int output_row = threadIdx.y * TM + i;
+          int output_col = threadIdx.x * TN + j;
+          t_c[i][j] += shmem_A[buffer_idx][output_row][k] * shmem_B[buffer_idx][output_col][k];
+      }
+    }
+  }
+
+  // write back to global memory
+  #pragma unroll
+  for (int i = 0; i < TM; i++ ){
+    #pragma unroll
+    for (int j = 0; j < TN; j++ ){
+        int output_row = threadIdx.y * TM + i;
+        int output_col = threadIdx.x * TN + j;
+        C[OFFSET(gmem_start_m + output_row, gmem_start_n + output_col, N)] = t_c[i][j];
+    }
+  }
 }
+
+
+
+
+
+
 
 template <typename T, int kTileM, int kTileN, int kTileK, typename TiledMMA>
 __global__ void gemm_simple(T *Cptr, const T *Aptr, const T *Bptr, int m, int n, int k) {
@@ -87,7 +201,7 @@ int main() {
 
   int m = 81920;
   int n = 256;
-  int k = 128;
+  int k = 256;
 
   cudaMalloc(&Cptr, sizeof(T) * m * n);
   cudaMalloc(&Aptr, sizeof(T) * m * k);
@@ -124,27 +238,54 @@ int main() {
   // Test CuTe implementation
   dim3 block(size(MMA{}));
   dim3 grid(n / kTileN, m / kTileM);
+  
+  cudaEvent_t start_cute, stop_cute;
+  cudaEventCreate(&start_cute);
+  cudaEventCreate(&stop_cute);
+  
+  cudaEventRecord(start_cute);
   for (int i = 0; i < 10; ++i) {
     gemm_simple<T, kTileM, kTileN, kTileK, MMA><<<grid, block>>>(Cptr, Aptr, Bptr, m, n, k);
   }
+  cudaEventRecord(stop_cute);
 
   cudaDeviceSynchronize();
   auto err = cudaGetLastError();
   printf("CuTe err = %d, str = %s\n", err, cudaGetErrorString(err));
+  
+  float milliseconds_cute = 0;
+  cudaEventElapsedTime(&milliseconds_cute, start_cute, stop_cute);
+  printf("CuTe GEMM time: %.3f ms (average per iteration: %.3f ms)\n", 
+         milliseconds_cute, milliseconds_cute / 10.0f);
 
-  // Test Native CUDA implementation
+  // ---------------------- Test Native CUDA implementation ----------------------
   T *Cptr_native;
   cudaMalloc(&Cptr_native, sizeof(T) * m * n);
   
-  dim3 block_native(16, 16);
-  dim3 grid_native((n + 15) / 16, (m + 15) / 16);
+  // dim3 block_native(16, 16);
+  // dim3 grid_native((n + 15) / 16, (m + 15) / 16);
+
+  dim3 grid_native((n + BN - 1) / BN, (m + BM - 1) / BM);
+  dim3 block_native(BN / TN, BM / TM);
+
+  cudaEvent_t start_native, stop_native;
+  cudaEventCreate(&start_native);
+  cudaEventCreate(&stop_native);
+  
+  cudaEventRecord(start_native);
   for (int i = 0; i < 10; ++i) {
     gemm_native_cuda<T><<<grid_native, block_native>>>(Cptr_native, Aptr, Bptr, m, n, k);
   }
+  cudaEventRecord(stop_native);
 
   cudaDeviceSynchronize();
   err = cudaGetLastError();
   printf("Native CUDA err = %d, str = %s\n", err, cudaGetErrorString(err));
+  
+  float milliseconds_native = 0;
+  cudaEventElapsedTime(&milliseconds_native, start_native, stop_native);
+  printf("Native CUDA GEMM time: %.3f ms (average per iteration: %.3f ms)\n", 
+         milliseconds_native, milliseconds_native / 10.0f);
 
   // ---------------------- cublas ----------------------------
   T *Cptr_cublas;
@@ -156,6 +297,12 @@ int main() {
 
   half alpha = half(1.f);
   half beta = half(0.f);
+  
+  cudaEvent_t start_cublas, stop_cublas;
+  cudaEventCreate(&start_cublas);
+  cudaEventCreate(&stop_cublas);
+  
+  cudaEventRecord(start_cublas);
   for (int i = 0; i < 100; ++i) {
     // T = Transpose, N = Normal 
     // in cublas, Ret^T = B^T * A^T (cublas normally return the col major matrix )
@@ -170,10 +317,16 @@ int main() {
       printf("blas err = %d, str = %s\n", ret, cublasGetStatusString(ret));
     }
   }
+  cudaEventRecord(stop_cublas);
 
   cudaDeviceSynchronize();
   err = cudaGetLastError();
-  printf("err = %d, str = %s\n", err, cudaGetErrorString(err));
+  printf("cuBLAS err = %d, str = %s\n", err, cudaGetErrorString(err));
+  
+  float milliseconds_cublas = 0;
+  cudaEventElapsedTime(&milliseconds_cublas, start_cublas, stop_cublas);
+  printf("cuBLAS GEMM time: %.3f ms (average per iteration: %.3f ms)\n", 
+         milliseconds_cublas, milliseconds_cublas / 100.0f);
 
   T *Cptr_host;
   T *Cptr_native_host;
@@ -207,6 +360,14 @@ int main() {
   
   printf("Differences found: CuTe-cuBLAS: %d, Native-cuBLAS: %d\n", cute_cublas_diff, native_cublas_diff);
 
+  // Performance Summary
+  printf("\n==================== Performance Summary ====================\n");
+  printf("Matrix dimensions: M=%d, N=%d, K=%d\n", m, n, k);
+  printf("CuTe GEMM:        %.3f ms/iter\n", milliseconds_cute / 10.0f);
+  printf("Native CUDA GEMM: %.3f ms/iter\n", milliseconds_native / 10.0f);
+  printf("cuBLAS GEMM:      %.3f ms/iter\n", milliseconds_cublas / 100.0f);
+  printf("=============================================================\n\n");
+
   Tensor tensor_C = make_tensor(Cptr_host, make_shape(m, n), make_stride(n, 1));
   Tensor tensor_C_native = make_tensor(Cptr_native_host, make_shape(m, n), make_stride(n, 1));
   Tensor tensor_C_cublas = make_tensor(Cptr_cublas_host, make_shape(m, n), make_stride(n, 1));
@@ -223,6 +384,27 @@ int main() {
   print_tensor(tc1_native);
   printf("cuBLAS result (first 4x4):\n");
   print_tensor(tc1_cublas);
+
+  // Cleanup
+  cudaEventDestroy(start_cute);
+  cudaEventDestroy(stop_cute);
+  cudaEventDestroy(start_native);
+  cudaEventDestroy(stop_native);
+  cudaEventDestroy(start_cublas);
+  cudaEventDestroy(stop_cublas);
+  cublasDestroy(handle);
+  
+  cudaFree(Cptr);
+  cudaFree(Aptr);
+  cudaFree(Bptr);
+  cudaFree(Cptr_native);
+  cudaFree(Cptr_cublas);
+  
+  free(Aptr_host);
+  free(Bptr_host);
+  free(Cptr_host);
+  free(Cptr_native_host);
+  free(Cptr_cublas_host);
 }
 
 template <typename T>

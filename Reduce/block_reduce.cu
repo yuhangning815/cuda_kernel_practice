@@ -35,27 +35,25 @@ __device__ __forceinline__ float warp_reduce_sum_f32(float val) {
 // a: Nx1, y=sum(a)
 template <const int NUM_THREADS = 256>
 __global__ void block_all_reduce_sum_f32_f32_kernel(float *a, float *y, int N) {
-  int tid = threadIdx.x;
-  int idx = blockIdx.x * NUM_THREADS + tid;
-  constexpr int NUM_WARPS = (NUM_THREADS + WARP_SIZE - 1) / WARP_SIZE;
-  __shared__ float reduce_smem[NUM_WARPS];
-  // keep the data in register is enough for warp operaion.
-  float sum = (idx < N) ? a[idx] : 0.0f;
-  int warp = tid / WARP_SIZE;
-  int lane = tid % WARP_SIZE;
-  // perform warp sync reduce.
-  sum = warp_reduce_sum_f32<WARP_SIZE>(sum);
-  // warp leaders store the data to shared memory.
-  if (lane == 0)
-    reduce_smem[warp] = sum;
-  __syncthreads(); // make sure the data is in shared memory.
+  constexpr int NUM_WARPS = (NUM_THREADS + 32 - 1) / 32;
+  __shared__ float reduce_smem[NUM_WARPS];         // Each warp does a reduce and store the result to shared memory !!!
+  
+  int gemm_idx = blockIdx.x * NUM_THREADS + threadIdx.x;
+  float val = (gemm_idx < N) ? a[gemm_idx] : 0.0f;
+  val = warp_reduce_sum_f32<32>(val);
 
-  // the first warp compute the final sum.
-  sum = (lane < NUM_WARPS) ? reduce_smem[lane] : 0.0f;        // 只用前 NUM_WARPS 个 thread ( < 32) 
-  if (warp == 0)
-    sum = warp_reduce_sum_f32<NUM_WARPS>(sum);             
-  if (tid == 0)
-    atomicAdd(y, sum);                  // 所有block 同时加到 global mem 要atomic add
+  if (threadIdx.x % 32 == 0) {
+    reduce_smem[threadIdx.x / 32] = val;
+  }
+  __syncthreads();
+
+  if (threadIdx.x < NUM_WARPS) {  // // 只用前 NUM_WARPS 个 thread ( < 32) 
+    float val_sum = reduce_smem[threadIdx.x];
+    val_sum = warp_reduce_sum_f32<NUM_WARPS>(val_sum);
+    if (threadIdx.x == 0) {
+      atomicAdd(y, val_sum);  // // 所有block 同时加到 global mem 要atomic add
+    }
+  }
 }
 
 
