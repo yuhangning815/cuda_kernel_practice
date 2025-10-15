@@ -1,0 +1,30 @@
+# Makefile for Warp Shuffle Prefix Sum
+# Optimized implementation using CUDA warp shuffle intrinsics
+
+NVCC = nvcc
+CXXFLAGS = -O3 -std=c++11
+CUDA_ARCH = -arch=sm_89
+
+TARGET = warp_shuffle_scan
+SOURCE = warp_shuffle_scan.cu
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE)
+	@echo "Compiling $(SOURCE)..."
+	$(NVCC) $(CXXFLAGS) $(CUDA_ARCH) -o $(TARGET) $(SOURCE)
+	@echo "Build complete: $(TARGET)"
+
+clean:
+	@echo "Cleaning..."
+	rm -f $(TARGET)
+	@echo "Clean complete"
+
+run: $(TARGET)
+	@echo "Running $(TARGET)..."
+	./$(TARGET)
+
+test: run
+
+.PHONY: all clean run test
+
